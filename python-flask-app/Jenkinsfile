@@ -1,41 +1,73 @@
+
 pipeline {
     agent any
+
+    environment {
+        APP_DIR = 'python-flask-app'
+        DEPLOY_DIR = "${WORKSPACE}/python-app-deploy"
+    }
 
     stages {
         stage('Build') {
             steps {
                 echo 'Creating virtual environment and installing dependencies...'
+                sh '''
+                    python3 -m venv venv
+                    venv/bin/pip install -r ${APP_DIR}/requirements.txt
+                '''
             }
         }
+
         stage('Test') {
             steps {
-                echo 'Running tests...'
-                sh 'python3 -m unittest discover -s .'
+                echo 'Running unit tests...'
+                sh '''
+                    venv/bin/python -m unittest discover \
+                        -s ${APP_DIR} -p "test*.py" -v
+                '''
             }
         }
+
         stage('Deploy') {
             steps {
-                echo 'Deploying application...'
+                echo 'Preparing application deployment...'
                 sh '''
-                mkdir -p ${WORKSPACE}/python-app-deploy
-                cp ${WORKSPACE}/app.py ${WORKSPACE}/python-app-deploy/
+                    mkdir -p "${DEPLOY_DIR}"
+                    cp "${APP_DIR}/app.py" "${DEPLOY_DIR}/"
+                    cp "${APP_DIR}/requirements.txt" "${DEPLOY_DIR}/"
                 '''
             }
         }
+
         stage('Run Application') {
             steps {
-                echo 'Running application...'
+                echo 'Starting Flask application...'
                 sh '''
-                nohup python3 ${WORKSPACE}/python-app-deploy/app.py > ${WORKSPACE}/python-app-deploy/app.log 2>&1 &
-                echo $! > ${WORKSPACE}/python-app-deploy/app.pid
+                    if [ -f "${DEPLOY_DIR}/app.pid" ]; then
+                        OLD_PID=$(cat "${DEPLOY_DIR}/app.pid")
+                        kill "$OLD_PID" 2>/dev/null || true
+                    fi
+
+                    nohup "${WORKSPACE}/venv/bin/python" \
+                        "${DEPLOY_DIR}/app.py" \
+                        > "${DEPLOY_DIR}/app.log" 2>&1 &
+
+                    echo $! > "${DEPLOY_DIR}/app.pid"
+                    sleep 3
+                    if ! kill -0 "$(cat "${DEPLOY_DIR}/app.pid")" 2>/dev/null; then
+                        cat "${DEPLOY_DIR}/app.log"
+                        exit 1
+                    fi
                 '''
             }
         }
+
         stage('Test Application') {
             steps {
-                echo 'Testing application...'
+                echo 'Running application tests...'
                 sh '''
-                python3 ${WORKSPACE}/test_app.py
+                    venv/bin/python -m unittest discover \
+                        -s ${APP_DIR} -p "test*.py" -v
                 '''
             }
         }
